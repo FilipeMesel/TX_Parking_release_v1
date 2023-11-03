@@ -1,0 +1,15 @@
+sx1262dvk1cas.c:68:6:SX1262DVK1CAS_RADIO_IoInit	88	static
+sx1262dvk1cas.c:111:6:SX1262DVK1CAS_RADIO_IoDeInit	48	static
+sx1262dvk1cas.c:122:6:SX1262DVK1CAS_RADIO_IoIrqInit	16	static
+sx1262dvk1cas.c:136:6:SX1262DVK1CAS_RADIO_IRQHandler	8	static
+sx1262dvk1cas.c:141:10:SX1262DVK1CAS_RADIO_GetWakeUpTime	0	static
+sx1262dvk1cas.c:146:6:SX1262DVK1CAS_RADIO_Reset	48	static
+sx1262dvk1cas.c:176:6:SX1262DVK1CAS_RADIO_WaitOnBusy	8	static
+sx1262dvk1cas.c:196:6:SX1262DVK1CAS_RADIO_ChipSelect	8	static
+sx1262dvk1cas.c:208:6:SX1262DVK1CAS_RADIO_SetAntSw	8	static
+sx1262dvk1cas.c:224:6:SX1262DVK1DAS_RADIO_CheckRfFrequency	0	static
+sx1262dvk1cas.c:230:6:SX1262DVK1CAS_RADIO_BoardIsTcxo	0	static
+sx1262dvk1cas.c:237:6:SX1262DVK1CAS_RADIO_Bus_Init	8	static
+sx1262dvk1cas.c:242:6:SX1262DVK1CAS_RADIO_Bus_deInit	8	static
+sx1262dvk1cas.c:252:10:SX1262DVK1CAS_RADIO_SendRecv	24	static
+sx1262dvk1cas.c:181:6:SX1262DVK1CAS_RADIO_WakeUp	8	static

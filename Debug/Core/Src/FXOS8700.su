@@ -1,0 +1,2 @@
+FXOS8700.c:14:9:magnetometter_get_who_am_i	32	static
+FXOS8700.c:42:9:magnetometter_init	48	static
