@@ -16,20 +16,29 @@
   *
   ******************************************************************************
   */
+
+/*
+ * ===============MUDANÇAS===================
+ * mexi em Core/Src/stm32l0xx_hal_msp.c: precisa add i2c init e deinit
+ * precisa copiar e colar o i2c.h e i2c.c presentes em Drivers
+ * precisa merjar o Core/Inc/stm32l0xx_hal_conf (descomentar o define do i2c)
+ * Precisa alterar algumas coisas em tx_app.h:
+ * * #define CLICKS_TO_TX					2//1
+ * * #define DEFAULT_TIME_TX					1//60
+ * Precisa alterar algumas coisas em tx_app.c:
+ * * TxAppInit();
+ * * OnTimer
+ * * #define i2c_timeout 							500//100//20000
+ * */
+
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "app_lorawan.h"
 
-
-I2C_HandleTypeDef hi2c1;
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "tx_app.h"
-#include "FXOS8700.h"
-
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,8 +62,6 @@ I2C_HandleTypeDef hi2c1;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-void MX_I2C1_Init(void);
-
 
 /* USER CODE BEGIN PFP */
 
@@ -63,42 +70,8 @@ void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-void MX_I2C1_Init(void)
-{
-
-	/* USER CODE BEGIN I2C1_Init 0 */
-
-	  /* USER CODE END I2C1_Init 0 */
-
-	  /* USER CODE BEGIN I2C1_Init 1 */
-
-	  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-
-  // Configure the I2C timing to achieve a clock speed of 400 kHz
-  hi2c1.Init.Timing = 0x00300F38;//0x00303D5B; // You may need to adjust this value
-
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-	Error_Handler();
-  }
-
-}
-
 /* USER CODE END 0 */
+
 /**
   * @brief  The application entry point.
   * @retval int
@@ -120,40 +93,41 @@ int main(void)
 
   /* Configure the system clock */
   SystemClock_Config();//SystemLowClock_Config();//SystemClock_Config();
-  /* USER CODE BEGIN 2 */
 
-  MX_I2C1_Init();
+  /* USER CODE BEGIN 2 */
 
   /* USER CODE BEGIN SysInit */
   /*configura watchdog para 1s*/
-  /*hwwdg.Instance = WWDG;
+  hwwdg.Instance = WWDG;
   hwwdg.Init.EWIMode = WWDG_EWI_DISABLE;
   hwwdg.Init.Prescaler = WWDG_PRESCALER_8;
-  hwwdg.Init.Window =  127;//WWDG_CFR_W;
-  hwwdg.Init.Counter = 60 * HAL_RCC_GetPCLK1Freq() / (8 * 127);//WWDG_CR_T;
-  HAL_WWDG_Init(&hwwdg);*/
+  hwwdg.Init.Window = WWDG_CFR_W;
+  hwwdg.Init.Counter = WWDG_CR_T;
+  HAL_WWDG_Init(&hwwdg);
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_LoRaWAN_Init();
-
-
-
-  TxAppInit();
-  uint8_t result = magnetometter_get_who_am_i(&hi2c1);
-  printValor(result);
-  result =  magnetometter_init(&hi2c1);
-  printValor(result);
-
+ MX_LoRaWAN_Init();
+  /* USER CODE BEGIN 2 */
+ TxAppInit();
   /* USER CODE END 2 */
 
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  unsigned long int last_tick = 0;
+  uint8_t flagAvaliarMagnetometro = 0;
   while (1)
   {
     /* USER CODE END WHILE */
     MX_LoRaWAN_Process();
+    if(getInterruptFlag() == 1)
+    {
+    	tratarInterrupcao();
+    	resetInterruptFlag();
+    }
 
     /* USER CODE BEGIN 3 */
-    //HAL_WWDG_Refresh(&hwwdg);
+    HAL_WWDG_Refresh(&hwwdg);
   }
   /* USER CODE END 3 */
 }

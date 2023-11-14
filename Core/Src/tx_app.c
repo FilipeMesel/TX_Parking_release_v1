@@ -26,6 +26,8 @@
 #include "sx126x.h"
 
 
+static  I2C_HandleTypeDef hi2c1;
+static int flagInterrupt;
 
 /* Private typedef -----------------------------------------------------------*/
 typedef struct{
@@ -47,7 +49,8 @@ typedef enum{
 }lora_state_t;
 
 typedef enum{
-	LORAWAN_MODE
+	LORAWAN_MODE,
+	P2P_MODE
 }tx_mode_t;
 
 typedef enum{
@@ -71,7 +74,6 @@ static LmHandlerAppData_t AppData = { 0, 0, AppDataBuffer };
 
 UTIL_TIMER_Object_t inputTimer;
 UTIL_TIMER_Object_t LedTimer;
-UTIL_TIMER_Object_t ResetCntDelayTimer;
 
 LPTIM_HandleTypeDef hlptim;
 
@@ -79,12 +81,13 @@ LPTIM_HandleTypeDef hlptim;
 UTIL_TIMER_Object_t LedPulseTimer;
 #endif
 UTIL_TIMER_Object_t btnTimeOutTimer;
-/*const app_exti_t app_exti_cnt[] = {
-		{.line = EXTI_LINE_14, .prio = 0, .exti_port = EXTI_GPIOA, .gpio_port = GPIOA, .pin = GPIO_PIN_14, .irqn = EXTI4_15_IRQn},
+const app_exti_t app_exti_cnt[] = {
+		{.line = EXTI_LINE_13, .prio = 0, .exti_port = EXTI_GPIOA, .gpio_port = GPIOA, .pin = GPIO_PIN_13, .irqn = EXTI4_15_IRQn},
+		/*{.line = EXTI_LINE_14, .prio = 0, .exti_port = EXTI_GPIOA, .gpio_port = GPIOA, .pin = GPIO_PIN_14, .irqn = EXTI4_15_IRQn},
 		{.line = EXTI_LINE_13, .prio = 0, .exti_port = EXTI_GPIOA, .gpio_port = GPIOA, .pin = GPIO_PIN_13, .irqn = EXTI4_15_IRQn},
 		{.line = EXTI_LINE_7, .prio = 0, .exti_port = EXTI_GPIOB, .gpio_port = GPIOB, .pin = GPIO_PIN_7, .irqn = EXTI4_15_IRQn},
-		{.line = EXTI_LINE_8, .prio = 0, .exti_port = EXTI_GPIOB, .gpio_port = GPIOB, .pin = GPIO_PIN_8, .irqn = EXTI4_15_IRQn},
-};*/
+		{.line = EXTI_LINE_8, .prio = 0, .exti_port = EXTI_GPIOB, .gpio_port = GPIOB, .pin = GPIO_PIN_8, .irqn = EXTI4_15_IRQn},*/
+};
 const app_exti_t app_exti_btn[] = {
 		{.line = EXTI_LINE_6, .prio = 0, .exti_port = EXTI_GPIOB, .gpio_port = GPIOB, .pin = GPIO_PIN_6, .irqn = EXTI4_15_IRQn}
 };
@@ -92,12 +95,11 @@ const output_pin_t output_pin[] = {
 		{.gpio_port = LED_TX_PORT, .pin = LED_TX_PIN},
 		{.gpio_port = EN_INPUT_PULSE_PORT, .pin = EN_INPUT_PULSE_PIN}
 };
-//#define APP_EXTI_CNT_NUM	(sizeof(app_exti_cnt)/sizeof(app_exti_t))
+#define APP_EXTI_CNT_NUM	(sizeof(app_exti_cnt)/sizeof(app_exti_t))
 #define APP_EXTI_BTN_NUM	(sizeof(app_exti_btn)/sizeof(app_exti_t))
 #define APP_OUTPUT_PIN_NUM	(sizeof(output_pin)/sizeof(output_pin_t))
-/*EXTI_HandleTypeDef hApp_DIO_exti[APP_EXTI_CNT_NUM+APP_EXTI_BTN_NUM];*/
-EXTI_HandleTypeDef hApp_DIO_exti[APP_EXTI_BTN_NUM];
-//uint16_t eeprom_wr_pos[APP_EXTI_CNT_NUM] = {0,0,0,0};
+EXTI_HandleTypeDef hApp_DIO_exti[APP_EXTI_CNT_NUM+APP_EXTI_BTN_NUM];
+uint16_t eeprom_wr_pos[APP_EXTI_CNT_NUM] = {0};//{0,0,0,0};
 
 typedef union{
 	struct cfga{
@@ -159,16 +161,15 @@ static void OnMacProcessNotify(void);
 
 static void OnTimer(void *contextid);
 static void OnTxTimerLedEvent(void *context);
-void OnDelayResetCnt(void *context);
 
 #if (BLINK_PULSE_LED_ENABLE == 1)
 static void OnLedPulseTimer(void *contextid);
 #endif
 static void OnBtnTimeoutTimer(void *contextid);
-static void ReadInput0(void);
+//static void ReadInput0(void);
 static void ReadInput1(void);
-static void ReadInput2(void);
-static void ReadInput3(void);
+/*static void ReadInput2(void);
+static void ReadInput3(void);*/
 static void ReadInput4(void);
 void TxAppInit(void);
 void EXTI_Init(AppDioIrqHandler **irqHandlers);
@@ -183,12 +184,421 @@ static void OnP2PTxTimeout(void);
 static void OnP2PRxTimeout(void);
 static void OnP2PRxError(void);
 
-void printValor(uint8_t valor);
+
+static int estacionamento_interrupt_tongle = 0; //Controla a chegada e saida de carros na vaga
+static int sendEstacionamentoTongle = 0; //Controla a chegada e saida de carros na vaga
+
+static void MX_I2C1_Init(void);
 
 
-void printValor(uint8_t valor){
-	APP_LOG(TS_OFF, VLEVEL_L, "vlr: %02X\r\n", valor);
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+	  hi2c1.Instance = I2C1;
+	  hi2c1.Init.Timing = 0x10909CEC;//0x00303D5B; // Timing configurado para operação a 400 kHz em Fast Mode
+	  hi2c1.Init.OwnAddress1 = 0;
+	  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+	  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+	  hi2c1.Init.OwnAddress2 = 0;
+	  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+	  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
+	  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+	  {
+	    Error_Handler(); // Tratamento de erro
+	  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
 }
+
+static SRAWDATA MAG;
+//static SRAWDATA ACCEL;
+
+
+// Sets the FXOS8700CQ to standby mode.
+// It must be in standby to change most register settings
+void FXOS8700CQStandby(I2C_HandleTypeDef *I2Cx)
+{
+	uint8_t CTRL_REG1_Data;
+	HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &CTRL_REG1_Data, 1, i2c_timeout);
+	CTRL_REG1_Data = CTRL_REG1_Data & ~(0x01); // Limpar o bit Active 0x01
+	HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &CTRL_REG1_Data, 1, i2c_timeout);
+}
+
+// Sets the FXOS8700CQ to active mode.
+// Needs to be in this mode to output data
+void FXOS8700CQActive(I2C_HandleTypeDef *I2Cx)
+{
+
+  uint8_t CTRL_REG1_Data;
+  HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &CTRL_REG1_Data, 1, i2c_timeout);
+  CTRL_REG1_Data = CTRL_REG1_Data | 0x01; // Limpar o bit Active
+  HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &CTRL_REG1_Data, 1, i2c_timeout);
+
+}
+
+/*
+ * Função para resetar os registradores do FXOS8700CQ
+ * */
+void FXOS8700CQReset(I2C_HandleTypeDef *I2Cx)
+{
+	uint8_t value = 0x40;
+	HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG2, 1, &value, 1, i2c_timeout);
+	HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_CTRL_REG2, 1, &value, 1, i2c_timeout);
+}
+
+
+/*
+ * Verifica status de funcionamento do barramento I2C
+ * */
+static uint8_t FXOS8700CQGetWhoAmI(I2C_HandleTypeDef *I2Cx)
+{
+	/*uint8_t check; //Check if device is ok
+	//20000
+	HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_WHOAMI, 1, &check, 1, 20000);
+	return check; //Check if device is ok*/
+
+	uint8_t check; // Check if the device is ok
+	uint8_t txData = FXOS8700CQ_WHOAMI; // Address of the WHO_AM_I register
+	HAL_StatusTypeDef status;
+
+	// Transmit the register address
+	status = HAL_I2C_Master_Transmit(I2Cx, (uint16_t)(FXOS8700CQ_SLAVE_ADDR << 1), &txData, 1, 50);
+	for(int i=0; i<20000; i++);
+	if (status == HAL_OK) {
+	    // Receive the data from the WHO_AM_I register
+	    status = HAL_I2C_Master_Receive(I2Cx,  (uint16_t)(FXOS8700CQ_SLAVE_ADDR), &check, 1, 50);
+
+	    if (status != HAL_OK) {
+	        // Handle the receive error here, e.g., set an error flag or handle it as needed
+	    }
+	} else {
+	    // Handle the transmit error here, e.g., set an error flag or handle it as needed
+	}
+
+	return check; // Check if the device is ok
+}
+
+uint8_t FXOS8700CQCheckCommunication(void)
+{
+
+	uint8_t check; //Check if device is ok
+	uint8_t Data; //Receive data
+	uint8_t databyte; //Write data
+
+	// read and check the FXOS8700CQ WHOAMI register
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_WHOAMI, 1, &check, 1, i2c_timeout);
+	if(check == FXOS8700CQ_WHOAMI_VAL)
+	{
+		return HAL_OK;
+	}
+	return 1;
+}
+
+/*
+ * Inicia o FXOS8700CQ sem o modo sleep. Habilita o Magnetômetro e o Acelerômetro
+ * */
+static uint8_t FXOS8700CQInit(I2C_HandleTypeDef *I2Cx)
+{
+	uint8_t ret = 1;
+	uint8_t check; //Check if device is ok
+	uint8_t Data; //Receive data
+	uint8_t databyte; //Write data
+
+	// read and check the FXOS8700CQ WHOAMI register
+	HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_WHOAMI, 1, &check, 1, i2c_timeout);
+	if(check == FXOS8700CQ_WHOAMI_VAL)
+	{
+		// write 0000 0000 = 0x00 to accelerometer control register 1 to place FXOS8700CQ into
+		// standby
+		// [7-1] = 0000 000
+		// [0]: active=0
+		databyte = 0x00;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &databyte, 1, i2c_timeout);
+
+		// write 0001 1111 = 0x1F to magnetometer control register 1
+		// [7]: m_acal=0: auto calibration disabled
+		// [6]: m_rst=0: no one-shot magnetic reset
+		// [5]: m_ost=0: no one-shot magnetic measurement
+		// [4-2]: m_os=111=7: 8x oversampling (for 200Hz) to reduce magnetometer noise
+		// [1-0]: m_hms=11=3: select hybrid mode with accel and magnetometer active
+		databyte = 0x1F;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_CTRL_REG1, 1, &databyte, 1, i2c_timeout);
+
+		// write 0010 0000 = 0x20 to magnetometer control register 2
+		// [7]: reserved
+		// [6]: reserved
+		// [5]: hyb_autoinc_mode=1 to map the magnetometer registers to follow the
+		// accelerometer registers
+		// [4]: m_maxmin_dis=0 to retain default min/max latching even though not used
+		// [3]: m_maxmin_dis_ths=0
+		// [2]: m_maxmin_rst=0
+		// [1-0]: m_rst_cnt=00 to enable magnetic reset each cycle
+		databyte = 0x20;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_CTRL_REG2, 1, &databyte, 1, i2c_timeout);
+
+		// write 0000 0001= 0x01 to XYZ_DATA_CFG register
+		// [7]: reserved
+		// [6]: reserved
+		// [5]: reserved
+		// [4]: hpf_out=0
+		// [3]: reserved
+		// [2]: reserved
+		// [1-0]: fs=01 for accelerometer range of +/-4g range with 0.488mg/LSB
+		databyte = 0x01;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_XYZ_DATA_CFG, 1, &databyte, 1, i2c_timeout);
+
+		// write 0000 1101 = 0x0D to accelerometer control register 1
+		// [7-6]: aslp_rate=00
+		// [5-3]: dr=001 for 200Hz data rate (when in hybrid mode)
+		// [2]: lnoise=1 for low noise mode
+		// [1]: f_read=0 for normal 16 bit reads
+		// [0]: active=1 to take the part out of standby and enable sampling
+		databyte =  0x0D;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &databyte, 1, i2c_timeout);
+		ret = 0;
+	}
+	return ret;
+}
+
+//Versão de configuração que habilita o Mag em modo sleep acionando INT1 quando valor de
+//X sobe para mais de 1000 unidades de medida.
+//Não usa o modo sleep do FXOS8700CQ
+//type (INTERRUPT_MAIOR_QUE INTERRUPT_MENOR_QUE)
+static uint8_t FXOS8700CQInitSleep(I2C_HandleTypeDef *I2Cx, int threshold, uint8_t type)
+{
+	uint8_t ret = 1;
+	uint8_t check; //Check if device is ok
+	uint8_t databyte; //Write data
+	uint8_t HighByteThreshold = (uint8_t)((threshold >> 8) & 0xFF);
+	uint8_t LowByteThreshold = (uint8_t)((threshold >> 8) & 0xFF);
+
+	//Reset FXOS8700CQ before configure
+	FXOS8700CQReset(I2Cx);
+
+	// read and check the FXOS8700CQ WHOAMI register
+	HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_WHOAMI, 1, &check, 1, i2c_timeout);
+	if(check == FXOS8700CQ_WHOAMI_VAL)
+	{
+		// Put it in standby mode every time before reconfigure anything
+		/*uint8_t CTRL_REG1_Data;
+		HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &CTRL_REG1_Data, 1, i2c_timeout);
+		CTRL_REG1_Data &= 0xFE; // Limpar o bit Active
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &CTRL_REG1_Data, 1, i2c_timeout);*/
+
+		FXOS8700CQStandby(I2Cx);
+		HAL_Delay(1);
+
+		//=========================INICIA CONFIGURAÇÃO LOW POWER ABAIXO!===================================================
+
+		//Configurando o valor 1000 para a interrupção em X
+		databyte = HighByteThreshold; //MSB de 1000
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_INTERRUPT_Z_MSB_REG, 1, &databyte, 1, i2c_timeout);
+		databyte = LowByteThreshold; //LSB de 1000
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_INTERRUPT_Z_LSB_REG, 1, &databyte, 1, i2c_timeout);
+
+		// Event flag latch enabled, logic OR of enabled axes, X and Y-axis enabled, wake on magnetic threshold event, threshold interrupt enabled and routed to INT1
+		if(type == INTERRUPT_MAIOR_QUE)
+			databyte = 0xE7;//0xCF; //Valor maior que -> 0xCF. Valor menor que 0x8F
+		else if(type == INTERRUPT_MENOR_QUE)
+			databyte = 0xA7;//0x8F; //Valor maior que -> 0xCF. Valor menor que 0x8F
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_THRESHOLD_CFG_REG, 1, &databyte, 1, i2c_timeout);
+
+		// Esse registrador é um multiplicador do tempo presente na tabela 196 do datasheet.
+		// Como estamos trabalhando a 12,5Hz; o multiplicador é de 80 em 80 ms.
+		databyte = 0x01;//Original 0x01; //0x0D (1040ms)//0x01; 80ms//Original 0x0A (800 ms)
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_THRESHOLD_DBC_COUNTER_REG, 1, &databyte, 1, i2c_timeout);
+
+		// Max OSR, only magnetometer is active
+		databyte = 0x01;//Original -> 0x1D
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_CTRL_REG1, 1, &databyte, 1, i2c_timeout);
+
+		// Push-pull, active low interrupt
+		databyte = 0x00;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG3, 1, &databyte, 1, i2c_timeout);
+
+		// Auto-sleep mode enabled
+		databyte = 0x04;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG2, 1, &databyte, 1, i2c_timeout);
+
+		// Auto-sleep counter set to 1.92s (6 x 0.32s = 1.92s)
+		databyte = 0x03;//0x03; (1s)//0x5E; (20s)//Original 0x06; ->Faz dormir depois de y ssegundos calculados conforme: x = y * 0.32s
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_ASLP_COUNT_REG, 1, &databyte, 1, i2c_timeout);
+
+		// Auto-sleep/wake interrupt enabled
+		databyte = 0x80;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1,FXOS8700CQ_M_CTRL_REG4, 1, &databyte, 1, i2c_timeout);
+
+		// Route auto-sleep/wake interrupt to INT1
+		databyte = 0x80;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_CTRL_REG5, 1, &databyte, 1, i2c_timeout);
+
+		// Finally activate device with ASLP ODR = 6.25Hz, Normal ODR = 100Hz
+		databyte = 0xA9;//0xF9 (1,5Hz normal e 1,5Hz sleep)//0xA9; (12,5Hz normal e 6,25 Hz sleep)//Original 0x99; (6,25Hz) //Original 0x19; (50Hz)
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_CTRL_REG1, 1, &databyte, 1, i2c_timeout);
+
+		FXOS8700CQActive(I2Cx);
+
+		ret = 0;
+	}
+	return ret;
+}
+
+/*
+//Versão OK
+//Versão de configuração que habilita o Mag em modo sleep acionando INT1 quando valor de
+//X sobe para mais de 1000 unidades de medida.
+//Não usa o modo sleep do FXOS8700CQ
+static uint8_t magnetometter_init(I2C_HandleTypeDef *I2Cx, int threshold)
+{
+	uint8_t ret = 1;
+	uint8_t check; //Check if device is ok
+	uint8_t Data; //Receive data
+	uint8_t databyte; //Write data
+	uint8_t HighByteThreshold = (uint8_t)((threshold >> 8) & 0xFF);
+	uint8_t LowByteThreshold = (uint8_t)((threshold >> 8) & 0xFF);
+
+	// read and check the FXOS8700CQ WHOAMI register
+	HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_WHOAMI, 1, &check, 1, i2c_timeout);
+	if(check == FXOS8700CQ_WHOAMI_VAL)
+	{
+		// write 0100 0000 = 0x40 to accelerometer control register 2 to place FXOS8700CQ into
+		// POR
+		// [7-1] = 0000 000
+		// [0]: active=0
+		//databyte = 0x40;
+		//HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x2B, 1, &databyte, 1, i2c_timeout);
+		//HAL_Delay(1); // Gere um atraso de 1 ms
+
+		//Configurando o valor 1000 para a interrupção em X
+		databyte = 0x05; //MSB de 1000
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x54, 1, &databyte, 1, i2c_timeout);
+		databyte = 0xDC; //LSB de 1000
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x55, 1, &databyte, 1, i2c_timeout);
+
+		// Event flag latch enabled, logic OR of enabled axes, X and Y-axis enabled, wake on magnetic threshold event, threshold interrupt enabled and routed to INT1
+		databyte = 0xCF;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x52, 1, &databyte, 1, i2c_timeout);
+
+		// Debounce timer period is 320ms (sleep mode) / 20ms (normal mode)
+		databyte = 0x0A;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x5A, 1, &databyte, 1, i2c_timeout);
+
+		// Max OSR, only magnetometer is active
+		databyte = 0x1D;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x5B, 1, &databyte, 1, i2c_timeout);
+
+		// Push-pull, active low interrupt
+		databyte = 0x00;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x2C, 1, &databyte, 1, i2c_timeout);
+
+		// Auto-sleep mode enabled
+		databyte = 0x04;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x2B, 1, &databyte, 1, i2c_timeout);
+
+		// Auto-sleep counter set to 1.92s (6 x 0.32s = 1.92s)
+		databyte = 0x06;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x29, 1, &databyte, 1, i2c_timeout);
+
+		// Auto-sleep/wake interrupt enabled
+		databyte = 0x80;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x2D, 1, &databyte, 1, i2c_timeout);
+
+		// Route auto-sleep/wake interrupt to INT1
+		databyte = 0x80;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x2E, 1, &databyte, 1, i2c_timeout);
+
+		// Finally activate device with ASLP ODR = 6.25Hz, Normal ODR = 100Hz
+		databyte = 0x19;
+		HAL_I2C_Mem_Write(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, 0x2A, 1, &databyte, 1, i2c_timeout);
+		ret = 0;
+	}
+	return ret;
+}*/
+
+// read status and the three channels of accelerometer and magnetometer data from
+// FXOS8700CQ (13 bytes)
+//void ReadAccelMagnData(SRAWDATA *pAccelData, SRAWDATA *pMagnData, I2C_HandleTypeDef *I2Cx)
+static void FXOS8700CQReadAccelMagnData(I2C_HandleTypeDef *I2Cx)
+{
+	uint8_t Buffer[FXOS8700CQ_READ_LEN]; // read buffer
+
+	// read FXOS8700CQ_READ_LEN=13 bytes (status byte and the six channels of data)
+	HAL_I2C_Mem_Read(I2Cx, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_STATUS, 1, &Buffer, FXOS8700CQ_READ_LEN, i2c_timeout);
+
+	// copy the 14 bit accelerometer byte data into 16 bit words
+	/*ACCEL.x = (int16_t)(((Buffer[1] << 8) | Buffer[2]))>> 2;
+	ACCEL.y = (int16_t)(((Buffer[3] << 8) | Buffer[4]))>> 2;
+	ACCEL.z = (int16_t)(((Buffer[5] << 8) | Buffer[6]))>> 2;*/
+
+	// copy the magnetometer byte data into 16 bit words
+	MAG.x = (Buffer[7] << 8) | Buffer[8];
+	MAG.y = (Buffer[9] << 8) | Buffer[10];
+	MAG.z = (Buffer[11] << 8) | Buffer[12];
+
+}
+
+/**
+ * Get data from struct
+ */
+static int16_t FXOS8700CQGetData(uint8_t dado_a_receber)
+{
+	switch(dado_a_receber)
+	{
+	case GET_MAG_X:
+	{
+
+		return MAG.x;
+	}
+	break;
+	case GET_MAG_Y:
+	{
+
+		return MAG.y;
+	}
+	break;
+	case GET_MAG_Z:
+	{
+
+		return MAG.z;
+	}
+	break;
+	/*case GET_ACCEL_X:
+	{
+
+		return ACCEL.x;
+	}
+	break;
+	case GET_ACCEL_Y:
+	{
+
+		return ACCEL.y;
+	}
+	break;
+	case GET_ACCEL_Z:
+	{
+		return ACCEL.z;
+
+	}
+	break;*/
+
+	}
+}
+
 
 /* Private variables ---------------------------------------------------------*/
 /**
@@ -214,14 +624,112 @@ static LmHandlerParams_t LmHandlerParams = {
   .PingPeriodicity =          LORAWAN_DEFAULT_PING_SLOT_PERIODICITY
 };
 
-//AppDioIrqHandler *AppDioIrq[APP_EXTI_CNT_NUM+APP_EXTI_BTN_NUM] = {ReadInput0, ReadInput1, ReadInput2, ReadInput3, ReadInput4};
-AppDioIrqHandler *AppDioIrq[APP_EXTI_BTN_NUM] = {ReadInput4};
+AppDioIrqHandler *AppDioIrq[APP_EXTI_CNT_NUM+APP_EXTI_BTN_NUM] = {ReadInput1, ReadInput4};//{ReadInput0, ReadInput1, ReadInput2, ReadInput3, ReadInput4};
 
 /* Private user code ---------------------------------------------------------*/
 
+/*int FXOS8700CQCalibrate(uint8_t type)
+{
+	FXOS8700CQReset(&hi2c1);
+	FXOS8700CQStandby(&hi2c1);
+	if(FXOS8700CQInit(&hi2c1) != HAL_OK){
+		FXOS8700CQReset(&hi2c1);
+		FXOS8700CQStandby(&hi2c1);
+	}
+	FXOS8700CQActive(&hi2c1);
+
+	int calibrate=0;
+
+	for(int i =0; i < 10; i++)
+	{
+		HAL_Delay(1);
+		FXOS8700CQReadAccelMagnData(&hi2c1);
+		if((int)(FXOS8700CQGetData(GET_MAG_Z)) > calibrate)
+		{
+			int auxiliar = (int)(FXOS8700CQGetData(GET_MAG_Z));
+			if(auxiliar == 0)
+			{
+				i--;
+				if(i < 0)
+				{
+					i = 0;
+				}
+			}else {
+				calibrate += auxiliar;
+			}
+		}
+
+	}
+	calibrate = (int)(FXOS8700CQGetData(GET_MAG_Z));//calibrate/10;
+	//APP_LOG(TS_OFF, VLEVEL_L, "Calibrate antes da redução =  %d\r\n", calibrate);
+	if(type == INTERRUPT_MAIOR_QUE)
+		calibrate += 100;//500;//1000;
+	else
+		calibrate -= 100;//500;//1000;
+	APP_LOG(TS_OFF, VLEVEL_L, "Calibrate =  %d| %d\r\n", calibrate, type);
+
+	return (int)calibrate;
+}*/
+
+int FXOS8700CQCalibrate(uint8_t type)
+{
+	FXOS8700CQReset(&hi2c1);
+	FXOS8700CQStandby(&hi2c1);
+	if(FXOS8700CQInit(&hi2c1) != HAL_OK){
+		FXOS8700CQReset(&hi2c1);
+		FXOS8700CQStandby(&hi2c1);
+	}
+	FXOS8700CQActive(&hi2c1);
+
+	int calibrate=0;
+	int valores[10] = {0};
+
+	for(int i =0; i < 10; i++)
+	{
+		HAL_Delay(1);
+		FXOS8700CQReadAccelMagnData(&hi2c1);
+		valores[i] = (int)(FXOS8700CQGetData(GET_MAG_Z));
+		/*if((int)(FXOS8700CQGetData(GET_MAG_Z)) > calibrate)
+		{
+			int auxiliar = (int)(FXOS8700CQGetData(GET_MAG_Z));
+			if(auxiliar == 0)
+			{
+				i--;
+				if(i < 0)
+				{
+					i = 0;
+				}
+			}else {
+				calibrate += auxiliar;
+			}
+		}*/
+
+	}
+	int maior = 0;
+	for(int i =0; i < 10; i++)
+	{
+		if(valores[i] > maior)
+		{
+			maior = valores[i];
+		}
+	}
+	calibrate = maior;//calibrate/10;
+	//APP_LOG(TS_OFF, VLEVEL_L, "Calibrate antes da redução =  %d\r\n", calibrate);
+	if(type == INTERRUPT_MAIOR_QUE)
+		calibrate += 200;//500;//1000;
+	else
+		calibrate -= 200;//500;//1000;
+	APP_LOG(TS_OFF, VLEVEL_L, "Calibrate =  %d| %d\r\n", calibrate, type);
+
+	return (int)calibrate;
+}
+
 void TxAppInit(void){
 
-
+	/*MX_I2C1_Init();
+	uint8_t wiam = magnetometter_init(&hi2c1);
+	ReadAccelMagnData(&hi2c1);*/
+	flagInterrupt = 0;
 
 	UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LmHandlerProcess), UTIL_SEQ_RFU, LmHandlerProcess);
 	UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), UTIL_SEQ_RFU, SendTxData);
@@ -257,18 +765,18 @@ void TxAppInit(void){
 			.Pull = GPIO_NOPULL,
 			.Speed = GPIO_SPEED_LOW
 	};
-	/*for(uint8_t i = 0; i < APP_EXTI_CNT_NUM; i++){
+	for(uint8_t i = 0; i < APP_EXTI_CNT_NUM; i++){
 		gpio_cfg.Pin = app_exti_cnt[i].pin;
 		HAL_GPIO_Init(app_exti_cnt[i].gpio_port, &gpio_cfg);
-		app.stt.pulse_count_tmp[i] = 0;
+		//app.stt.pulse_count_tmp[i] = 0;
 #if	(SAVE_CNT_MODE == SAVE_CNT_ON_PULSE)
-		//escaneia a eeprom em busca do maior valor salvo para cada contador
+		/*escaneia a eeprom em busca do maior valor salvo para cada contador*/
 		for(pos = i;pos < EEPROM_WORDS; pos+=4){
 			tmp1 = eeprom_cfg.word[pos];
 			if(tmp1 == 0){
 				break;
 			}
-			if(pos < 4){
+			if(pos < 4){/**/
 				tmp2 = eeprom_cfg.word[pos+4];
 				if(tmp1 > tmp2){
 					tmp2 = eeprom_cfg.word[pos+(EEPROM_WORDS-4)];
@@ -297,10 +805,10 @@ void TxAppInit(void){
 		//app.cfg.pulse_count[i] = tmp1;
 		eeprom_wr_pos[i] = pos+4;
 #endif
-	}*/
-	/*if(app.cfg.cfg.tx_mode == P2P_MODE){
+	}
+	if(app.cfg.cfg.tx_mode == P2P_MODE){
 		P2P_Radio_Init();
-	}*/
+	}
 	gpio_cfg.Pull = GPIO_PULLUP;
 	gpio_cfg.Speed = GPIO_SPEED_FAST;
 	for(uint8_t i = 0; i < APP_EXTI_BTN_NUM; i++){
@@ -318,7 +826,7 @@ void TxAppInit(void){
 	LED_TX(false);
 	HAL_GPIO_WritePin(EN_INPUT_PULSE_PORT, EN_INPUT_PULSE_PIN, GPIO_PIN_SET);
 	UTIL_TIMER_Create(&inputTimer, 0xFFFFFFFFU, UTIL_TIMER_PERIODIC, OnTimer, NULL);
-	UTIL_TIMER_SetPeriod(&inputTimer, app.cfg.cfg.tx_time*60000);
+	UTIL_TIMER_SetPeriod(&inputTimer, app.cfg.cfg.tx_time*1000);//60000
 	UTIL_TIMER_Start(&inputTimer);
 #if (BLINK_PULSE_LED_ENABLE == 1)
 	UTIL_TIMER_Create(&LedPulseTimer, 0xFFFFFFFFU, UTIL_TIMER_ONESHOT, OnLedPulseTimer, NULL);
@@ -327,8 +835,6 @@ void TxAppInit(void){
 	UTIL_TIMER_Create(&btnTimeOutTimer, 0xFFFFFFFFU, UTIL_TIMER_ONESHOT, OnBtnTimeoutTimer, NULL);
 	UTIL_TIMER_SetPeriod(&btnTimeOutTimer, BTN_TIMEOUT);
 	UTIL_TIMER_Create(&LedTimer, 0xFFFFFFFFU, UTIL_TIMER_ONESHOT, OnTxTimerLedEvent, NULL);
-	UTIL_TIMER_Create(&ResetCntDelayTimer, 0xFFFFFFFFU, UTIL_TIMER_ONESHOT, OnDelayResetCnt, NULL);
-	UTIL_TIMER_SetPeriod(&ResetCntDelayTimer, 3000);
 #if	(SAVE_CNT_MODE == SAVE_CNT_AT_PWR_OFF)
 	/*configura interrupcap por brown out*/
 	PWR_PVDTypeDef sConfigPVD = {
@@ -347,14 +853,60 @@ void TxAppInit(void){
 	HAL_NVIC_SetPriority(PVD_IRQn, 0, 0);
 	HAL_NVIC_EnableIRQ(PVD_IRQn);
 #endif
-
+	/*Gera clock no pino de saida*//*
+	hlptim.Instance = LPTIM1;
+	hlptim.Init.Clock.Source = LPTIM_CLOCKSOURCE_APBCLOCK_LPOSC;
+	hlptim.Init.Clock.Prescaler = LPTIM_PRESCALER_DIV1;
+	hlptim.Init.Trigger.Source = LPTIM_TRIGSOURCE_SOFTWARE;
+	hlptim.Init.OutputPolarity = LPTIM_OUTPUTPOLARITY_LOW;
+	hlptim.Init.UpdateMode = LPTIM_UPDATE_IMMEDIATE;
+	HAL_LPTIM_Init(&hlptim);
+	HAL_LPTIM_PWM_Start(&hlptim, 100, 50);
+	*/
 	/*Imprime Dev EUI e Versao de firmware ao iniciar*/
 	uint8_t eui[8];
 	LmHandlerGetDevEUI(&eui[0]);
 	APP_LOG(TS_OFF, VLEVEL_L, "SN:%02X%02X%02X%02X%02X%02X%02X%02X\r\n", eui[0], eui[1], eui[2], eui[3], eui[4], eui[5], eui[6], eui[7]);
-	//APP_LOG(TS_OFF, VLEVEL_L, "%s\r\n", fver);
-	//APP_LOG(TS_OFF, VLEVEL_L, "%s\r\n", model);
+	APP_LOG(TS_OFF, VLEVEL_L, "%s\r\n", fver);
+	APP_LOG(TS_OFF, VLEVEL_L, "%s\r\n", model);
+
+	MX_I2C1_Init();
+
+
+
+	uint8_t wiam = FXOS8700CQInitSleep(&hi2c1, FXOS8700CQCalibrate(INTERRUPT_MAIOR_QUE), INTERRUPT_MAIOR_QUE);//magnetometter_init(&hi2c1);//magnetometter_init_sleep(&hi2c1, 65097);
+	APP_LOG(TS_OFF, VLEVEL_L, "WHO I AM %02X\r\n", wiam);
+	if(wiam != 0)
+	{
+		//Reseta se wiam for diferente de 0
+		HAL_Delay(10000);
+	}
+
+	/*FXOS8700CQStandby(&hi2c1);
+	FXOS8700CQActive(&hi2c1);*/
+
+	/*ReadAccelMagnData(&hi2c1);
+	uint16_t magX = (uint16_t)(getData(GET_MAG_X));
+	uint16_t magY = (uint16_t)(getData(GET_MAG_Y));
+	uint16_t magZ = (uint16_t)(getData(GET_MAG_Z));
+	APP_LOG(TS_OFF, VLEVEL_L, "nMG - X: %d Y: %d Z: %d\r\n",  magX, magY, magZ);*/
+	//App_Send(SEND_MODE_MANUAL);
+
 }
+/*
+void HAL_LPTIM_MspInit(LPTIM_HandleTypeDef *hlptim){
+	GPIO_InitTypeDef GPIO_Init;
+	__HAL_RCC_LPTIM1_CONFIG(RCC_LPTIM1CLKSOURCE_LSE);
+	//while (__HAL_RCC_GET_LPTIM1_SOURCE() != RCC_LPTIM1CLKSOURCE_LSE);
+	__HAL_RCC_LPTIM1_CLK_ENABLE();
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+	GPIO_Init.Pin = PWM_OUTPUT_PIN;
+	GPIO_Init.Alternate = PWM_OUTPUT_AF;
+	GPIO_Init.Mode = PWM_OUTPUT_MODE;
+	GPIO_Init.Pull = PWM_OUTPUT_PULL;
+	GPIO_Init.Speed = PWM_OUTPUT_SPEED;
+	HAL_GPIO_Init(PWM_OUTPUT_GPIO, &GPIO_Init);
+}*/
 
 /*
  * Interrupcao de brown out para salvar valores de contadores na eeprom
@@ -384,7 +936,7 @@ void EEPROM_Write(uint32_t d, uint32_t *addr){
 }
 
 #if	(SAVE_CNT_MODE == SAVE_CNT_ON_PULSE)
-/*uint32_t *EEPROM_NextAddr(uint16_t offset){
+uint32_t *EEPROM_NextAddr(uint16_t offset){
 	uint32_t *p;
 	p = &eeprom_cfg.word[eeprom_wr_pos[offset]];
 	eeprom_wr_pos[offset] += 4;
@@ -392,14 +944,14 @@ void EEPROM_Write(uint32_t d, uint32_t *addr){
 		eeprom_wr_pos[offset] %= 4;
 	}
 	return p;
-}*/
+}
 #endif
 
 /*
  * Controle de picadas do LED
  */
 void LED_Blink(led_mode_t mode){
-	if(mode >= LED_MODE_OFF || app.stt.led_mode != LED_MODE_OFF){
+	if(mode > LED_MODE_P2P || app.stt.led_mode != LED_MODE_OFF){
 		return;
 	}
 	LED_TX(true);
@@ -407,13 +959,17 @@ void LED_Blink(led_mode_t mode){
 	UTIL_TIMER_Stop(&LedTimer);
 	switch(mode){
 	case LED_MODE_TX:
-		UTIL_TIMER_StartWithPeriod(&LedTimer, LED_TX_LORAWAN_ON_TIME);
+		if(app.cfg.cfg.tx_mode == P2P_MODE){
+			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_TX_P2P_ON_TIME);
+		}else{
+			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_TX_LORAWAN_ON_TIME);
+		}
 		break;
 	case LED_MODE_LORAWAN:
-		UTIL_TIMER_StartWithPeriod(&LedTimer, LED_CRC_ON_ON_TIME);
+		UTIL_TIMER_StartWithPeriod(&LedTimer, LED_LORAWAN_ON_TIME);
 		break;
-	case LED_MODE_RESET_CNT:
-		UTIL_TIMER_StartWithPeriod(&LedTimer, LED_RESET_CNT_TIME);
+	case LED_MODE_P2P:
+		UTIL_TIMER_StartWithPeriod(&LedTimer, LED_P2P_ON_TIME);
 		break;
 	default:
 		LED_TX(false);
@@ -425,12 +981,16 @@ void LED_Blink(led_mode_t mode){
  * Transmiste dados por LoRa P2P/LoRaWAN
  */
 void App_Send(send_mode_t mode){
+
 	uint8_t eui[10];
 	if(app.stt.lora_state == LORA_IDLE){
 		app.stt.lora_state = LORA_BUSY;
 		LmHandlerGetDevEUI(&eui[0]);
 		APP_LOG(TS_OFF, VLEVEL_L, "SN:%02X%02X%02X%02X%02X%02X%02X%02X\r\n", eui[0], eui[1], eui[2], eui[3], eui[4], eui[5], eui[6], eui[7]);
-		/*salva valores dos contadores antes de cada transmissao*/
+		/*salva valores dos contadores antes de cada transmissao*//*
+		for(uint8_t i = 0; i < APP_EXTI_CNT_NUM; i++){
+			EEPROM_Write(((uint32_t *)(&app.cfg))[i], &eeprom_cfg.word[i]);
+		}*/
 		LED_Blink(LED_MODE_TX);
 		if(app.cfg.cfg.tx_mode == LORAWAN_MODE){
 			if(mode == SEND_MODE_AUTO){
@@ -441,6 +1001,18 @@ void App_Send(send_mode_t mode){
 				AppData.BufferSize = fillBufferManualTx(AppData.Buffer);
 			}
 			UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+		}else if(app.cfg.cfg.tx_mode == P2P_MODE){
+			Radio.SetChannel(P2P_RF_FREQUENCY);
+			LmHandlerGetDevEUI(&LoRaBuffer[0]);
+			LoRaBufferSize = 8;
+			if(mode == SEND_MODE_AUTO){
+				LoRaBufferSize += fillBufferAutoTx((uint8_t *)&LoRaBuffer[LoRaBufferSize]);
+			}else{
+				LoRaBufferSize += fillBufferManualTx((uint8_t *)&LoRaBuffer[LoRaBufferSize]);
+			}
+			app.stt.send_mode = mode;
+			Radio.Send(&LoRaBuffer[2], LoRaBufferSize-2);
+			app.stt.tx_cnt = 0;
 		}
 	}
 }
@@ -449,16 +1021,24 @@ void App_Send(send_mode_t mode){
  * Evento que ocorrera a cada uma hora para salvar as diferencas de contagem por hora e envia todas a cada 6 horas
  */
 static void OnTimer(void *contextid){
+	//APP_LOG(TS_OFF, VLEVEL_L, "OnTimer\r\n");
 	static uint8_t ind = 5; /*marca indice de horas passadas*/
 	if(ind == 0){
 		ind = 5;
-		App_Send(SEND_MODE_AUTO);
+
+		//App_Send(SEND_MODE_AUTO);
 	}else{
 		ind--;
 		/*for(uint8_t cnt = 0; cnt < APP_EXTI_CNT_NUM; cnt++){
-			//app.stt.cnt_per_hour[cnt][ind] = app.cfg.cfg.pulse_count[cnt] - app.stt.pulse_count_tmp[cnt];
-			//app.stt.pulse_count_tmp[cnt] = app.cfg.cfg.pulse_count[cnt];
+			app.stt.cnt_per_hour[cnt][ind] = app.cfg.cfg.pulse_count[cnt] - app.stt.pulse_count_tmp[cnt];
+			app.stt.pulse_count_tmp[cnt] = app.cfg.cfg.pulse_count[cnt];
 		}*/
+		/*ReadAccelMagnData(&hi2c1);
+		int16_t magX = getData(GET_MAG_X);
+		int16_t magY = getData(GET_MAG_Y);
+		int16_t magZ = getData(GET_MAG_Z);
+		APP_LOG(TS_OFF, VLEVEL_L, "nTX_Mg - X: %d Y: %d Z: %d| %d\r\n",  magX, magY, magZ, ind);*/
+		FXOS8700CQForceSleep();
 	}
 }
 
@@ -467,9 +1047,8 @@ static void OnTimer(void *contextid){
  */
 static void OnTxTimerLedEvent(void *context){
 	static uint8_t blinkCntTX = (LED_TX_BLINK_TIMES*2);
-	static uint8_t blinkCntLoRa = (LED_CRC_ON_BLINK_TIMES*2);
-	static uint8_t blinkCntP2P = (LED_CRC_OFF_BLINK_TIMES*2);
-	static uint8_t blinkCntRst = (LED_RESET_CNT_TIMES*2);
+	static uint8_t blinkCntLoRa = (LED_LORAWAN_BLINK_TIMES*2);
+	static uint8_t blinkCntP2P = (LED_P2P_BLINK_TIMES*2);
 	switch(app.stt.led_mode){
 	case LED_MODE_TX:
 		if(blinkCntTX & 0x01){
@@ -479,7 +1058,11 @@ static void OnTxTimerLedEvent(void *context){
 		}
 		if(blinkCntTX){
 			blinkCntTX--;
-			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_TX_LORAWAN_BLINK_TIME);
+			if(app.cfg.cfg.tx_mode == P2P_MODE){
+				UTIL_TIMER_StartWithPeriod(&LedTimer, LED_TX_P2P_BLINK_TIME);
+			}else{
+				UTIL_TIMER_StartWithPeriod(&LedTimer, LED_TX_LORAWAN_BLINK_TIME);
+			}
 		}else{
 			blinkCntTX = (LED_TX_BLINK_TIMES*2);
 			app.stt.led_mode = LED_MODE_OFF;
@@ -493,9 +1076,9 @@ static void OnTxTimerLedEvent(void *context){
 		}
 		if(blinkCntLoRa){
 			blinkCntLoRa--;
-			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_CRC_ON_BLINK_TIME);
+			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_LORAWAN_BLINK_TIME);
 		}else{
-			blinkCntLoRa = (LED_CRC_ON_BLINK_TIMES*2);
+			blinkCntLoRa = (LED_LORAWAN_BLINK_TIMES*2);
 			app.stt.led_mode = LED_MODE_OFF;
 		}
 		break;
@@ -507,33 +1090,16 @@ static void OnTxTimerLedEvent(void *context){
 		}
 		if(blinkCntP2P){
 			blinkCntP2P--;
-			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_CRC_OFF_BLINK_TIME);
+			UTIL_TIMER_StartWithPeriod(&LedTimer, LED_P2P_BLINK_TIME);
 		}else{
-			blinkCntP2P = (LED_CRC_OFF_BLINK_TIMES*2);
-			app.stt.led_mode = LED_MODE_OFF;
-		}
-		break;
-	case LED_MODE_RESET_CNT:
-		if(blinkCntRst & 0x01){
-			LED_TX(true);
-		}else{
-			LED_TX(false);
-		}
-		if(blinkCntRst){
-			/*padrao de piscadas com intervalos crescentes*/
-			uint32_t t = LED_RESET_CNT_TIME * (1 << (((LED_RESET_CNT_TIMES*2) - blinkCntRst) >> 1));
-			blinkCntRst--;
-			UTIL_TIMER_StartWithPeriod(&LedTimer, t);
-		}else{
-			blinkCntRst = (LED_RESET_CNT_TIMES*2);
+			blinkCntP2P = (LED_P2P_BLINK_TIMES*2);
 			app.stt.led_mode = LED_MODE_OFF;
 		}
 		break;
 	default:
 		blinkCntTX = (LED_TX_BLINK_TIMES*2);
-		blinkCntLoRa = (LED_CRC_ON_BLINK_TIMES*2);
-		blinkCntP2P = (LED_CRC_OFF_BLINK_TIMES*2);
-		blinkCntRst = (LED_RESET_CNT_TIMES*2);
+		blinkCntLoRa = (LED_LORAWAN_BLINK_TIMES*2);
+		blinkCntP2P = (LED_P2P_BLINK_TIMES*2);
 		LED_TX(false);
 		app.stt.led_mode = LED_MODE_OFF;
 		break;
@@ -553,13 +1119,30 @@ static void OnLedPulseTimer(void *contextid){
  * Ocorre apos temporizacao da ultima subida da entrada do botao
  */
 static void OnBtnTimeoutTimer(void *contextid){
-	if(app.stt.btnCnt >= CLICKS_TO_TX && app.stt.btnCnt < (CLICKS_TO_CHANGE_MODE/2)){
+	if(app.stt.btnCnt >= CLICKS_TO_TX && app.stt.btnCnt < (CLICKS_TO_CHANGE_MODE)){
+		if(sendEstacionamentoTongle == 1)
+		{
+			sendEstacionamentoTongle = 0;
+
+		}else {
+
+			sendEstacionamentoTongle = 1;
+
+		}
 		App_Send(SEND_MODE_MANUAL);
-	}else if(app.stt.btnCnt > (CLICKS_TO_CHANGE_MODE/2)){
-		if(app.cfg.cfg.tx_mode != LORAWAN_MODE){
+	}else if(app.stt.btnCnt >= (CLICKS_TO_CHANGE_MODE)){
+		if(app.cfg.cfg.tx_mode != P2P_MODE){
+			app.cfg.cfg.tx_mode = P2P_MODE;
+			LED_Blink(LED_MODE_P2P);
+			/*Salva o novo modo na eeprom independentemente da posicao que estiver na estrutura*/
+			//EEPROM_Write(((uint32_t *)(&app.cfg))[offsetof(cfg_t, cfg.tx_mode)/sizeof(uint32_t)], &eeprom_cfg.word[offsetof(cfg_t, cfg.tx_mode)/sizeof(uint32_t)]);
+			P2P_Radio_Init();
+			Radio.Sleep();
+		}else if(app.cfg.cfg.tx_mode != LORAWAN_MODE){
 			app.cfg.cfg.tx_mode = LORAWAN_MODE;
 			LED_Blink(LED_MODE_LORAWAN);
 			/*Salva o novo modo na eeprom independentemente da posicao que estiver na estrutura*/
+			//EEPROM_Write(((uint32_t *)(&app.cfg))[offsetof(cfg_t, cfg.tx_mode)/sizeof(uint32_t)], &eeprom_cfg.word[offsetof(cfg_t, cfg.tx_mode)/sizeof(uint32_t)]);
 			LoRaWAN_Mode_Init();
 		}
 	}
@@ -610,26 +1193,52 @@ void LoRaWAN_Mode_Init(void){
 	}
 }
 
+
 /*
  * Preenche dados para envio Automatico (periodico)
  */
 uint16_t fillBufferAutoTx(uint8_t *buffer){
 	uint16_t i = 0;
-	uint32_t tmp;
+	//uint32_t tmp;
 	buffer[i++] = 5;
 	/*leitura da tensao de bateria com arredondamento*/
 	buffer[i++] = (uint8_t)((SYS_GetBatteryLevel() + 50)/100);
+
+	/*int16_t tmp = getData(GET_MAG_X);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = getData(GET_MAG_Y);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = getData(GET_MAG_Z);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);*/
+
+
+	int tmp = 255;
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = FXOS8700CQGetData(GET_MAG_Y);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = FXOS8700CQGetData(GET_MAG_Z);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+
+	buffer[i++] = sendEstacionamentoTongle;//estacionamento_interrupt_tongle; //Controla a chegada e saida de carros na vaga
+
+
 	/*for(uint8_t cnt = 0; cnt < APP_EXTI_CNT_NUM;cnt+=2){
 		//mover a contagem inteira de uma só vez evita erros em caso de interrupcao no meio da tranferencia de bytes
-		tmp = 0;//app.cfg.cfg.pulse_count[cnt];
+		tmp = app.cfg.cfg.pulse_count[cnt];
 		//salva exatamente o valor que foi enviado evitando erros em caso de interrupcao entre duas leituras da mesma variavel
-		//app.stt.pulse_count_tmp[cnt] = tmp;
+		app.stt.pulse_count_tmp[cnt] = tmp;
 		buffer[i++] = (tmp >> 24) & 0xff;
 		buffer[i++] = (tmp >> 16) & 0xff;
 		buffer[i++] = (tmp >> 8) & 0xff;
 		buffer[i++] = tmp & 0xff;
-		tmp = 0;//app.cfg.cfg.pulse_count[cnt+1];
-		//app.stt.pulse_count_tmp[cnt+1] = tmp;
+		tmp = app.cfg.cfg.pulse_count[cnt+1];
+		app.stt.pulse_count_tmp[cnt+1] = tmp;
 		buffer[i++] = (tmp >> 24) & 0xff;
 		buffer[i++] = (tmp >> 16) & 0xff;
 		buffer[i++] = (tmp >> 8) & 0xff;
@@ -647,18 +1256,41 @@ uint16_t fillBufferAutoTx(uint8_t *buffer){
  */
 uint16_t fillBufferManualTx(uint8_t *buffer){
 	uint16_t i = 0;
-	uint32_t tmp;
+	//uint32_t tmp;
 	buffer[i++] = 0;
 	/*leitura da tensao de bateria com arredondamento*/
 	buffer[i++] = (uint8_t)((SYS_GetBatteryLevel() + 50)/100);
-	for(uint8_t cnt = 0; cnt < APP_EXTI_BTN_NUM;cnt++){
+
+	/*int16_t tmp = getData(GET_MAG_X);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = getData(GET_MAG_Y);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = getData(GET_MAG_Z);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);*/
+
+	int tmp = 255;
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = FXOS8700CQGetData(GET_MAG_Y);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	tmp = FXOS8700CQGetData(GET_MAG_Z);
+	buffer[i++] = (uint8_t)((tmp >> 8) & 0xff);
+	buffer[i++] = (uint8_t)(tmp & 0xff);
+	buffer[i++] = sendEstacionamentoTongle;//estacionamento_interrupt_tongle; //Controla a chegada e saida de carros na vaga
+
+
+	/*for(uint8_t cnt = 0; cnt < APP_EXTI_CNT_NUM;cnt++){
 		//mover a contagem inteira de uma só vez evita erros em caso de interrupcao no meio da tranferencia de bytes
-		tmp = 0;//app.cfg.cfg.pulse_count[cnt];
+		tmp = app.cfg.cfg.pulse_count[cnt];
 		buffer[i++] = (tmp >> 24) & 0xff;
 		buffer[i++] = (tmp >> 16) & 0xff;
 		buffer[i++] = (tmp >> 8) & 0xff;
 		buffer[i++] = tmp & 0xff;
-	}
+	}*/
 	return i;
 }
 
@@ -685,7 +1317,9 @@ void LED_TX(GPIO_PinState state){
 /*
  * Interrupcao externa para a entrada de pulso 1
  */
-void ReadInput0(void){
+/*void ReadInput0(void){
+
+
 	static uint32_t last_tick = 0;
 	uint32_t tick;
 #if (BLINK_PULSE_LED_ENABLE == 1)
@@ -694,20 +1328,188 @@ void ReadInput0(void){
 #endif
 	tick = UTIL_TIMER_GetCurrentTime();
 	if(tick - last_tick >= INPUT_DEBOUNCE_TIME){
-		//app.cfg.cfg.pulse_count[0]++;
+		app.cfg.cfg.pulse_count[0]++;
 		last_tick = tick;
 	}
 	//APP_LOG(TS_OFF, VLEVEL_M, "PL01 = %d\r\n", app.cfg.cfg.pulse_count[0]);
 #if	(SAVE_CNT_MODE == SAVE_CNT_ON_PULSE)
-	//EEPROM_Write(app.cfg.pulse_count[0], EEPROM_NextAddr(0));
+	EEPROM_Write(app.cfg.pulse_count[0], EEPROM_NextAddr(0));
 #endif
 	HAL_EXTI_ClearPending(&hApp_DIO_exti[0], EXTI_TRIGGER_RISING_FALLING);
+}*/
+int getInterruptFlag(void)
+{
+	return flagInterrupt;
+}
+void resetInterruptFlag(void)
+{
+	flagInterrupt = 0;
 }
 
+void FXOS8700CQForceSleep(void)
+{
+	uint8_t Sysmod;
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_SYSMOD, 1, &Sysmod, 1, i2c_timeout);
+	//APP_LOG(TS_OFF, VLEVEL_L, "magnetometerForceSleep = %d\n\r", Sysmod);
+	if(Sysmod != 0x02)
+	{
+		FXOS8700CQReset(&hi2c1);
+		HAL_Delay(10000);
+	}
+}
+
+/*void tratarInterrupcao(void)
+{
+	uint8_t Int_Source;
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_INT_SRC_REG, 1, &Int_Source, 1, i2c_timeout);
+	if (Int_Source & 0x04)  // Magnetic threshold event detected?
+	{
+
+		APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP1 -> INTERRUPT THRESHOLD!\r\n");
+		uint8_t M_Ths_Src; //Caputra a polaridade do trigger (Positiva ou Negativa) para os eixos configurados
+		HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_THS_SRC_REG, 1, &M_Ths_Src, 1, i2c_timeout);
+		if(estacionamento_interrupt_tongle == 0)
+		{
+
+			APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP1 -> Carro Estacionou\r\n");
+			estacionamento_interrupt_tongle = 1;
+			int value = magnetometter_calibrate(INTERRUPT_MENOR_QUE);
+			magnetometter_init_sleep(&hi2c1, value, INTERRUPT_MENOR_QUE);
+
+		}else {
+
+			APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP1 -> Carro Saiu\r\n");
+			estacionamento_interrupt_tongle = 0;
+			int value = magnetometter_calibrate(INTERRUPT_MAIOR_QUE);
+			magnetometter_init_sleep(&hi2c1, value, INTERRUPT_MAIOR_QUE);
+		}
+	}
+
+	//Indica se ocorreu interrupção ou não.
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_INT_SOURCE, 1, &Int_Source, 1, i2c_timeout);
+	if (Int_Source & 0x80)  // Auto-sleep/"ake interrupt?
+	{
+		//Sysmod -> Indica o status do dispositivo: 0b01 (Ativo) 0b10 (Dormindo)
+		uint8_t Sysmod;
+		HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_SYSMOD, 1, &Sysmod, 1, i2c_timeout);
+		APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP2 -> Return to sleep mode Int_Source %02X, Sysmod %02X\r\n", Int_Source, Sysmod);
+		if(Sysmod != 0x02)
+		{
+			while(1);
+		}
+	}
+	flagInterrupt = 0;
+	App_Send(SEND_MODE_AUTO);
+}*/
+
+void tratarInterrupcao(void)
+{
+	//static uint32_t last_tick = 0;
+
+	uint8_t Int_Source;
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_INT_SRC_REG, 1, &Int_Source, 1, i2c_timeout);
+	if (Int_Source & 0x04)  // Magnetic threshold event detected?
+	{
+
+		APP_LOG(TS_OFF, VLEVEL_L, "INTERRUPT THRESHOLD\r\n");
+		uint8_t M_Ths_Src; //Caputra a polaridade do trigger (Positiva ou Negativa) para os eixos configurados
+		HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_THS_SRC_REG, 1, &M_Ths_Src, 1, i2c_timeout);
+
+		/*uint32_t tick;
+		tick = UTIL_TIMER_GetCurrentTime();
+		if(tick - last_tick >= INPUT_DEBOUNCE_TIME)
+		{
+			last_tick = tick;
+			app.stt.btnCnt++;
+			UTIL_TIMER_Stop(&btnTimeOutTimer);
+			UTIL_TIMER_Start(&btnTimeOutTimer);
+		}*/
+		app.stt.btnCnt++;
+		if(estacionamento_interrupt_tongle == 0)
+		{
+
+			estacionamento_interrupt_tongle = 1;
+			int value = FXOS8700CQCalibrate(INTERRUPT_MENOR_QUE);
+			FXOS8700CQInitSleep(&hi2c1, value, INTERRUPT_MENOR_QUE);
+
+		}else {
+
+			estacionamento_interrupt_tongle = 0;
+			int value = FXOS8700CQCalibrate(INTERRUPT_MAIOR_QUE);
+			FXOS8700CQInitSleep(&hi2c1, value, INTERRUPT_MAIOR_QUE);
+		}
+
+	}
+
+	//Indica se ocorreu interrupção ou não de sleep mode.
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_INT_SOURCE, 1, &Int_Source, 1, i2c_timeout);
+	if (Int_Source & 0x80)  // Auto-sleep/"ake interrupt?
+	{
+		//Sysmod -> Indica o status do dispositivo: 0b01 (Ativo) 0b10 (Dormindo)
+		uint8_t Sysmod;
+		HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_SYSMOD, 1, &Sysmod, 1, i2c_timeout);
+		APP_LOG(TS_OFF, VLEVEL_L, "MAGNETOMETER: GO TO SLEEP| Int_Source %02X, Sysmod %02X\r\n", Int_Source, Sysmod);
+		if(Sysmod != 0x02)
+		{
+			HAL_Delay(10000);
+		}
+		UTIL_TIMER_Stop(&btnTimeOutTimer);
+		UTIL_TIMER_Start(&btnTimeOutTimer);
+
+	}
+	APP_LOG(TS_OFF, VLEVEL_L, "app.stt.btnCnt = %d\n\r", app.stt.btnCnt);
+}
+
+
 /*
- * Interrupcao externa para a entrada de pulso 2
+ * Interrupcao externa para a entrada do magnetômetro
  */
 void ReadInput1(void){
+
+	flagInterrupt = 1;
+	HAL_EXTI_ClearPending(&hApp_DIO_exti[1], EXTI_TRIGGER_RISING_FALLING);
+	/*uint8_t Int_Source;
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_INT_SRC_REG, 1, &Int_Source, 1, i2c_timeout);
+	if (Int_Source & 0x04)  // Magnetic threshold event detected?
+	{
+
+		APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP1 -> INTERRUPT THRESHOLD!\r\n");
+		uint8_t M_Ths_Src; //Caputra a polaridade do trigger (Positiva ou Negativa) para os eixos configurados
+		HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_M_THS_SRC_REG, 1, &M_Ths_Src, 1, i2c_timeout);
+		if(estacionamento_interrupt_tongle == 0)
+		{
+
+			APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP1 -> Carro Estacionou\r\n");
+			estacionamento_interrupt_tongle = 1;
+			int value = magnetometter_calibrate(INTERRUPT_MENOR_QUE);
+			magnetometter_init_sleep(&hi2c1, value, INTERRUPT_MENOR_QUE);
+
+		}else {
+
+			APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP1 -> Carro Saiu\r\n");
+			estacionamento_interrupt_tongle = 0;
+			int value = magnetometter_calibrate(INTERRUPT_MAIOR_QUE);
+			magnetometter_init_sleep(&hi2c1, value, INTERRUPT_MAIOR_QUE);
+		}
+	}
+
+	//Indica se ocorreu interrupção ou não.
+	HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_INT_SOURCE, 1, &Int_Source, 1, i2c_timeout);
+	if (Int_Source & 0x80)  // Auto-sleep/"ake interrupt?
+	{
+		//Sysmod -> Indica o status do dispositivo: 0b01 (Ativo) 0b10 (Dormindo)
+		uint8_t Sysmod;
+		HAL_I2C_Mem_Read(&hi2c1, FXOS8700CQ_SLAVE_ADDR << 1, FXOS8700CQ_SYSMOD, 1, &Sysmod, 1, i2c_timeout);
+		APP_LOG(TS_OFF, VLEVEL_L, "nMG - BP2 -> Return to sleep mode Int_Source %02X, Sysmod %02X\r\n", Int_Source, Sysmod);
+		if(Sysmod != 0x02)
+		{
+			while(1);
+		}
+		App_Send(SEND_MODE_MANUAL);
+
+	}*/
+
+/*
 	static uint32_t last_tick = 0;
 	uint32_t tick;
 #if (BLINK_PULSE_LED_ENABLE == 1)
@@ -716,20 +1518,20 @@ void ReadInput1(void){
 #endif
 	tick = UTIL_TIMER_GetCurrentTime();
 	if(tick - last_tick >= INPUT_DEBOUNCE_TIME){
-		//app.cfg.cfg.pulse_count[1]++;
+		app.cfg.cfg.pulse_count[1]++;
 		last_tick = tick;
 	}
 	//APP_LOG(TS_OFF, VLEVEL_M, "PL02 = %d\r\n", app.cfg.cfg.pulse_count[1]);
 #if	(SAVE_CNT_MODE == SAVE_CNT_ON_PULSE)
-	//EEPROM_Write(app.cfg.pulse_count[1], EEPROM_NextAddr(1));
+	EEPROM_Write(app.cfg.pulse_count[1], EEPROM_NextAddr(1));
 #endif
-	HAL_EXTI_ClearPending(&hApp_DIO_exti[1], EXTI_TRIGGER_RISING_FALLING);
+	HAL_EXTI_ClearPending(&hApp_DIO_exti[1], EXTI_TRIGGER_RISING_FALLING);*/
 }
 
 /*
  * Interrupcao externa para a entrada de pulso 3
  */
-void ReadInput2(void){
+/*void ReadInput2(void){
 	static uint32_t last_tick = 0;
 	uint32_t tick;
 #if (BLINK_PULSE_LED_ENABLE == 1)
@@ -746,12 +1548,12 @@ void ReadInput2(void){
 	//EEPROM_Write(app.cfg.pulse_count[2], EEPROM_NextAddr(2));
 #endif
 	HAL_EXTI_ClearPending(&hApp_DIO_exti[2], EXTI_TRIGGER_RISING_FALLING);
-}
+}*/
 
 /*
  * Interrupcao externa para a entrada de pulso 4
  */
-void ReadInput3(void){
+/*void ReadInput3(void){
 	static uint32_t last_tick = 0;
 	uint32_t tick;
 #if (BLINK_PULSE_LED_ENABLE == 1)
@@ -768,21 +1570,24 @@ void ReadInput3(void){
 	//EEPROM_Write(app.cfg.pulse_count[3], EEPROM_NextAddr(3));
 #endif
 	HAL_EXTI_ClearPending(&hApp_DIO_exti[3], EXTI_TRIGGER_RISING_FALLING);
-}
+}*/
 
 /*
  * Interrupcao externa para a entrada digital do usuario
  */
 void ReadInput4(void){
-	static uint32_t last_tick = 0;
+	/*static uint32_t last_tick = 0;
 	uint32_t tick;
 	tick = UTIL_TIMER_GetCurrentTime();
 	if(tick - last_tick >= INPUT_DEBOUNCE_TIME){
 		last_tick = tick;
-		app.stt.btnCnt++;
-		UTIL_TIMER_Stop(&btnTimeOutTimer);
-		UTIL_TIMER_Start(&btnTimeOutTimer);
-	}
+		estacionamento_interrupt_tongle = 0;
+		uint8_t wiam = FXOS8700CQInitSleep(&hi2c1, FXOS8700CQCalibrate(INTERRUPT_MAIOR_QUE), INTERRUPT_MAIOR_QUE);//magnetometter_init(&hi2c1);//magnetometter_init_sleep(&hi2c1, 65097);
+		//app.stt.btnCnt++;
+		//UTIL_TIMER_Stop(&btnTimeOutTimer);
+		//UTIL_TIMER_Start(&btnTimeOutTimer);
+	}*/
+
 	HAL_EXTI_ClearPending(&hApp_DIO_exti[4], EXTI_TRIGGER_RISING_FALLING);
 }
 
@@ -794,21 +1599,19 @@ void EXTI_Init(AppDioIrqHandler **irqHandlers){
 	pExtiConfig.Mode = EXTI_MODE_INTERRUPT;
 	pExtiConfig.Trigger = EXTI_TRIGGER_FALLING;
 	CRITICAL_SECTION_BEGIN();
-	/*for (uint32_t i = 0; i < APP_EXTI_CNT_NUM ; i++){
+	for (uint32_t i = 0; i < APP_EXTI_CNT_NUM ; i++){
 		pExtiConfig.Line = app_exti_cnt[i].line;
 		pExtiConfig.GPIOSel = app_exti_cnt[i].exti_port;
 		HAL_EXTI_SetConfigLine(&hApp_DIO_exti[i], &pExtiConfig);
 		HAL_EXTI_RegisterCallback(&hApp_DIO_exti[i], HAL_EXTI_COMMON_CB_ID, irqHandlers[i]);
 		HAL_NVIC_SetPriority(app_exti_cnt[i].irqn, app_exti_cnt[i].prio, 0x00);
 		HAL_NVIC_EnableIRQ(app_exti_cnt[i].irqn);
-	}*/
+	}
 	for (uint32_t i = 0; i < APP_EXTI_BTN_NUM ; i++){
 		pExtiConfig.Line = app_exti_btn[i].line;
 		pExtiConfig.GPIOSel = app_exti_btn[i].exti_port;
-		//HAL_EXTI_SetConfigLine(&hApp_DIO_exti[i+APP_EXTI_CNT_NUM], &pExtiConfig);
-		HAL_EXTI_SetConfigLine(&hApp_DIO_exti[i], &pExtiConfig);
-		//HAL_EXTI_RegisterCallback(&hApp_DIO_exti[i+APP_EXTI_CNT_NUM], HAL_EXTI_COMMON_CB_ID, irqHandlers[i+APP_EXTI_CNT_NUM]);
-		HAL_EXTI_RegisterCallback(&hApp_DIO_exti[i], HAL_EXTI_COMMON_CB_ID, irqHandlers[i]);
+		HAL_EXTI_SetConfigLine(&hApp_DIO_exti[i+APP_EXTI_CNT_NUM], &pExtiConfig);
+		HAL_EXTI_RegisterCallback(&hApp_DIO_exti[i+APP_EXTI_CNT_NUM], HAL_EXTI_COMMON_CB_ID, irqHandlers[i+APP_EXTI_CNT_NUM]);
 		HAL_NVIC_SetPriority(app_exti_btn[i].irqn, app_exti_btn[i].prio, 0x00);
 		HAL_NVIC_EnableIRQ(app_exti_btn[i].irqn);
 	}
@@ -869,9 +1672,9 @@ static void OnP2PRxError(void){
  */
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params){
 	APP_LOG(TS_OFF, VLEVEL_L, "Downlink recebido. Rssi: %d\r\n", params->Rssi);
-	if ((appData != NULL) && (params != NULL)){
+	/*if ((appData != NULL) && (params != NULL)){
 		if(appData->Port == APP_DOWNLINK_PORT){
-			if(appData->BufferSize == 4){
+			if(appData->BufferSize == 3){
 				uint16_t tmp = ((uint16_t)appData->Buffer[1] << 8) | ((uint16_t)appData->Buffer[2] & 0x00FF);
 				if(tmp > 0){
 					app.cfg.cfg.tx_time = tmp;
@@ -882,20 +1685,6 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params){
 				}else{
 					APP_LOG(TS_OFF, VLEVEL_M, "Valor de registro não pode ser nulo!\r\n");
 				}
-				uint8_t clr_cnt = appData->Buffer[3];
-				uint8_t blink = 0;
-				if((clr_cnt & 0xf0) == 0xa0){
-					/*for(int i = 0; i < APP_EXTI_CNT_NUM && i < 4; i++){
-						if(clr_cnt & (0x01 << i)){
-							//app.cfg.cfg.pulse_count[i] = 0;
-							blink = 1;
-						}
-					}*/
-				}
-				if(blink){
-					/*agenda piscada de indicacao de reset de contadores*/
-					UTIL_TIMER_Start(&ResetCntDelayTimer);
-				}
 			}else{
 				APP_LOG(TS_OFF, VLEVEL_M, "Tamanho de Downlink invalido: %d\r\n", appData->BufferSize);
 			}
@@ -904,14 +1693,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params){
 		}
 		return;
 	}
-	APP_LOG(TS_OFF, VLEVEL_M, "Downlink invalido!\r\n");
-}
-
-/*
- * Atraso para afastar a piscada do reset de contadores da piscada de transmissao
- */
-void OnDelayResetCnt(void *context){
-	LED_Blink(LED_MODE_RESET_CNT);
+	APP_LOG(TS_OFF, VLEVEL_M, "Downlink invalido!\r\n");*/
 }
 
 /*
@@ -944,6 +1726,18 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams){
 static void OnMacProcessNotify(void){
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LmHandlerProcess), CFG_SEQ_Prio_0);
 }
+
+/*
+ * Callback para recepcao na serial em modo timeout (timeout apos ultimo byte recebido)
+ *//*
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart){
+	if(huart->Instance == USART2){
+		if(huart->ErrorCode & HAL_UART_ERROR_RTO){
+			rx_bytes(rxBuffer, huart->RxXferSize - huart->RxXferCount, 0);
+		    HAL_UART_Receive_IT(huart, rxBuffer, 16);
+		}
+	}
+}*/
 
 /*
  * Processa comandos recebidos pela serial

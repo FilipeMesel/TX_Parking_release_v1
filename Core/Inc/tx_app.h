@@ -11,6 +11,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32l0xx_hal.h"
 #include "stm32_timer.h"
+#include <stdint.h>
+#include <math.h>
 
 /* Exported types ----------------------------------------------------------------*/
 typedef void (AppDioIrqHandler)(void);
@@ -18,7 +20,6 @@ typedef enum{
 	LED_MODE_TX,
 	LED_MODE_LORAWAN,
 	LED_MODE_P2P,
-	LED_MODE_RESET_CNT,
 	LED_MODE_OFF
 }led_mode_t;
 
@@ -31,6 +32,13 @@ extern AppDioIrqHandler *AppDioIrq[];
 
 /* Exported functions prototypes ---------------------------------------------*/
 void TxAppInit(void);
+
+
+int getInterruptFlag(void);
+void tratarInterrupcao(void);
+void resetInterruptFlag(void);
+uint8_t magnetometerCheckCommunication(void);
+void FXOS8700CQForceSleep(void);
 
 /* Exported constants --------------------------------------------------------*/
 
@@ -99,7 +107,7 @@ void TxAppInit(void);
  */
 #define LORAWAN_DEFAULT_PING_SLOT_PERIODICITY       4
 
-#define FIRMWARE_VERSION				"V1_1_0"
+#define FIRMWARE_VERSION				"V1_1_1"
 #define MODEL_CODE						"PLCD.019-024"
 
 #define APP_DOWNLINK_PORT				1
@@ -123,7 +131,7 @@ void TxAppInit(void);
 #define SAVE_CNT_MODE					SAVE_CNT_OFF
 #define BLINK_PULSE_LED_ENABLE			0
 
-#define CLICKS_TO_CHANGE_MODE			10
+#define CLICKS_TO_CHANGE_MODE			5//10
 #define CLICKS_TO_TX					1
 #define BTN_TIMEOUT						1000
 
@@ -148,15 +156,13 @@ void TxAppInit(void);
 #define LED_TX_LORAWAN_ON_TIME						6000
 #define LED_TX_P2P_BLINK_TIME						500
 #define LED_TX_P2P_ON_TIME							500
-#define LED_CRC_ON_BLINK_TIMES						9
-#define LED_CRC_ON_BLINK_TIME						100
-#define LED_CRC_ON_ON_TIME							100
-#define LED_CRC_OFF_BLINK_TIMES							0
-#define LED_CRC_OFF_BLINK_TIME							1000
-#define LED_CRC_OFF_ON_TIME								2000
-#define LED_RESET_CNT_TIMES							3
-#define LED_RESET_CNT_TIME							200
-#define INPUT_DEBOUNCE_TIME							100
+#define LED_LORAWAN_BLINK_TIMES						9
+#define LED_LORAWAN_BLINK_TIME						100
+#define LED_LORAWAN_ON_TIME							100
+#define LED_P2P_BLINK_TIMES							0
+#define LED_P2P_BLINK_TIME							1000
+#define LED_P2P_ON_TIME								2000
+#define INPUT_DEBOUNCE_TIME							10000//200//100
 
 #define ADC_MAX_VALUE								4095
 #define AN0_ADC_CHANNEL								ADC_CHANNEL_9
@@ -172,5 +178,84 @@ void TxAppInit(void);
 #define PWM_OUTPUT_PULL								GPIO_NOPULL
 #define PWM_OUTPUT_SPEED							GPIO_SPEED_FAST
 #define PWM_OUTPUT_AF								GPIO_AF2_LPTIM1
+
+// FXOS8700CQ internal register addresses
+#define FXOS8700CQ_STATUS 						0x00 //Status register
+#define FXOS8700CQ_SYSMOD						0x0B //Sysmod register
+#define FXOS8700CQ_INT_SOURCE					0x0C //Interrupt source register
+#define FXOS8700CQ_WHOAMI 						0x0D //Who am i register
+#define FXOS8700CQ_XYZ_DATA_CFG 				0x0E //XYZ Data register
+#define FXOS8700CQ_CTRL_REG1 					0x2A //CTRL Register
+#define FXOS8700CQ_M_CTRL_REG1 					0x5B //CTRL Magnetometter register
+#define FXOS8700CQ_M_CTRL_REG2 					0x5C //CTRL 2 Magnetometter register
+#define FXOS8700CQ_CTRL_REG2 					0x2B
+#define FXOS8700CQ_M_CTRL_REG3 					0x5D //CTRL 3 Magnetometter register
+#define FXOS8700CQ_CTRL_REG3 					0x2C
+#define FXOS8700CQ_M_CTRL_REG4 					0x2D //CTRL 3 Magnetometter register
+#define FXOS8700CQ_M_CTRL_REG5 					0x2E //CTRL 3 Magnetometter register
+#define FXOS8700CQ_WHOAMI_VAL 					0xC7 //Who am i response
+
+#define FXOS8700CQ_THRESHOLD_CFG_REG			0x52 // Magnetic threshold detection function configuration register
+
+#define  FXOS8700CQ_M_THS_SRC_REG				0x53 //Indicador da polaridade do trigger observado.
+
+#define FXOS8700CQ_INTERRUPT_X_MSB_REG 			0x54 //Registrador que configura o valor MSB para estourar a inerrupção no eixo X
+#define FXOS8700CQ_INTERRUPT_X_LSB_REG 			0x55 //Registrador que configura o valor LSB para estourar a inerrupção no eixo X
+
+#define FXOS8700CQ_INTERRUPT_Y_MSB_REG 			0x56 //Registrador que configura o valor MSB para estourar a inerrupção no eixo Y
+#define FXOS8700CQ_INTERRUPT_Y_LSB_REG 			0x57 //Registrador que configura o valor LSB para estourar a inerrupção no eixo Y
+
+#define FXOS8700CQ_INTERRUPT_Z_MSB_REG 			0x58 //Registrador que configura o valor MSB para estourar a inerrupção no eixo Z
+#define FXOS8700CQ_INTERRUPT_Z_LSB_REG 			0x59 //Registrador que configura o valor LSB para estourar a inerrupção no eixo Z
+
+#define FXOS8700CQ_THRESHOLD_DBC_COUNTER_REG	0x5A // Magnetic threshold debounce counter
+
+#define FXOS8700CQ_M_INT_SRC_REG				0x5E // Magnetic threshold debounce counter
+
+#define FXOS8700CQ_ASLP_COUNT_REG				0x29 // ASLP_COUNT Auto Sleep Inactivity Timer Register
+
+
+// number of bytes to be read from the FXOS8700CQ
+#define FXOS8700CQ_READ_LEN 					13 // status plus 6 channels = 13 bytes
+
+/** Macro for micro tesla (uT) per LSB (1 LSB = 0.1uT) */
+#define MAG_UT_LSB (0.1F)
+
+/*
+ * O endereço pode ser:
+ * 0x1E quando SA0 = 0, SA1 = 0
+ * 0x1D quando SA0 = 1, SA1 = 0
+ * 0x1C quando SA0 = 0, SA1 = 1
+ * 0x1F quando SA0 = 1, SA1 = 1
+ * */
+#define FXOS8700CQ_SLAVE_ADDR 					0x1E // with pins SA0=0, SA1=0
+
+#define i2c_timeout 							500//100//20000
+
+enum
+{
+	GET_MAG_X,
+	GET_MAG_Y,
+	GET_MAG_Z,
+	GET_ACCEL_X,
+	GET_ACCEL_Y,
+	GET_ACCEL_Z,
+	INTERRUPT_MAIOR_QUE,
+	INTERRUPT_MENOR_QUE,
+	ESTACIONAMENTO_CARRO_SAIU,
+	ESTACIONAMENTO_CARRO_CHEGOU
+};
+
+typedef struct
+{
+	int16_t x;
+	int16_t y;
+	int16_t z;
+
+	/*double value_x;
+	double value_y;
+	double value_z;*/
+
+} SRAWDATA;
 
 #endif
