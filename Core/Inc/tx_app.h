@@ -11,8 +11,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32l0xx_hal.h"
 #include "stm32_timer.h"
-#include <stdint.h>
-#include <math.h>
 
 /* Exported types ----------------------------------------------------------------*/
 typedef void (AppDioIrqHandler)(void);
@@ -20,6 +18,7 @@ typedef enum{
 	LED_MODE_TX,
 	LED_MODE_LORAWAN,
 	LED_MODE_P2P,
+	LED_MODE_RESET_CNT,
 	LED_MODE_OFF
 }led_mode_t;
 
@@ -32,13 +31,6 @@ extern AppDioIrqHandler *AppDioIrq[];
 
 /* Exported functions prototypes ---------------------------------------------*/
 void TxAppInit(void);
-
-
-int getInterruptFlag(void);
-void tratarInterrupcao(void);
-void resetInterruptFlag(void);
-uint8_t magnetometerCheckCommunication(void);
-void FXOS8700CQForceSleep(void);
 
 /* Exported constants --------------------------------------------------------*/
 
@@ -107,7 +99,7 @@ void FXOS8700CQForceSleep(void);
  */
 #define LORAWAN_DEFAULT_PING_SLOT_PERIODICITY       4
 
-#define FIRMWARE_VERSION				"V1_1_1"
+#define FIRMWARE_VERSION				"V1_1_0"
 #define MODEL_CODE						"PLCD.019-024"
 
 #define APP_DOWNLINK_PORT				1
@@ -131,7 +123,7 @@ void FXOS8700CQForceSleep(void);
 #define SAVE_CNT_MODE					SAVE_CNT_OFF
 #define BLINK_PULSE_LED_ENABLE			0
 
-#define CLICKS_TO_CHANGE_MODE			5//10
+#define CLICKS_TO_CHANGE_MODE			10
 #define CLICKS_TO_TX					1
 #define BTN_TIMEOUT						1000
 
@@ -156,13 +148,15 @@ void FXOS8700CQForceSleep(void);
 #define LED_TX_LORAWAN_ON_TIME						6000
 #define LED_TX_P2P_BLINK_TIME						500
 #define LED_TX_P2P_ON_TIME							500
-#define LED_LORAWAN_BLINK_TIMES						9
-#define LED_LORAWAN_BLINK_TIME						100
-#define LED_LORAWAN_ON_TIME							100
-#define LED_P2P_BLINK_TIMES							0
-#define LED_P2P_BLINK_TIME							1000
-#define LED_P2P_ON_TIME								2000
-#define INPUT_DEBOUNCE_TIME							10000//200//100
+#define LED_CRC_ON_BLINK_TIMES						9
+#define LED_CRC_ON_BLINK_TIME						100
+#define LED_CRC_ON_ON_TIME							100
+#define LED_CRC_OFF_BLINK_TIMES							0
+#define LED_CRC_OFF_BLINK_TIME							1000
+#define LED_CRC_OFF_ON_TIME								2000
+#define LED_RESET_CNT_TIMES							3
+#define LED_RESET_CNT_TIME							200
+#define INPUT_DEBOUNCE_TIME							100
 
 #define ADC_MAX_VALUE								4095
 #define AN0_ADC_CHANNEL								ADC_CHANNEL_9
@@ -178,6 +172,7 @@ void FXOS8700CQForceSleep(void);
 #define PWM_OUTPUT_PULL								GPIO_NOPULL
 #define PWM_OUTPUT_SPEED							GPIO_SPEED_FAST
 #define PWM_OUTPUT_AF								GPIO_AF2_LPTIM1
+
 
 // FXOS8700CQ internal register addresses
 #define FXOS8700CQ_STATUS 						0x00 //Status register
@@ -242,8 +237,8 @@ enum
 	GET_ACCEL_Z,
 	INTERRUPT_MAIOR_QUE,
 	INTERRUPT_MENOR_QUE,
-	ESTACIONAMENTO_CARRO_SAIU,
-	ESTACIONAMENTO_CARRO_CHEGOU
+	VAGA_VAZIA,
+	VAGA_OCUPADA
 };
 
 typedef struct
@@ -259,3 +254,4 @@ typedef struct
 } SRAWDATA;
 
 #endif
+

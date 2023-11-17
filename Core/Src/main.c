@@ -120,11 +120,11 @@ int main(void)
   {
     /* USER CODE END WHILE */
     MX_LoRaWAN_Process();
-    if(getInterruptFlag() == 1)
+    /*if(getInterruptFlag() == 1)
     {
     	tratarInterrupcao();
     	resetInterruptFlag();
-    }
+    }*/
 
     /* USER CODE BEGIN 3 */
     HAL_WWDG_Refresh(&hwwdg);
